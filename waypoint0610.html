@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>경로 생성 및 UTM 좌표 변환</title>
+    <!-- 여기에서 YOUR_API_KEY 부분에 발급받은 JavaScript 키를 넣습니다 -->
+    <script type="text/javascript" src="//dapi.kakao.com/v2/maps/sdk.js?appkey=(카카오맵 html appkey 넣는곳, 괄호도지워야 함.)&libraries=services"></script>
+    <style>
+        #map {
+            width: 100%;
+            height: 800px;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <button onclick="getRouteCoords()">경로 위경도 출력</button>
+    <button onclick="downloadCSV()">CSV 다운로드</button>
+    <pre id="coordsList"></pre>
+
+    <script>
+        var markers = []; // 마커를 저장할 배열
+        var polyline;
+
+        // WGS84 타원체 상수
+        var a = 6378137.0; // 반장축
+        var f = 1 / 298.257223563; // 편평률
+        var b = a * (1 - f); // 반단축
+        var e = Math.sqrt(1 - (b * b) / (a * a)); // 제1 편심률
+        var ePrimeSquared = e * e / (1 - e * e); // 제2 편심률
+
+        // 카카오 지도 API가 로드되었는지 확인
+        if (typeof kakao === 'undefined') {
+            console.error('카카오 지도 API가 로드되지 않았습니다. API 키가 올바른지 확인하세요.');
+        } else {
+            var mapContainer = document.getElementById('map'); 
+            var mapOption = { 
+                center: new kakao.maps.LatLng(37.566826, 126.9786567), // 지도의 중심좌표
+                level: 5 // 지도의 확대 레벨
+            }; 
+
+            var map = new kakao.maps.Map(mapContainer, mapOption); // 지도를 생성합니다
+
+            polyline = new kakao.maps.Polyline({
+                path: [], // 선을 구성하는 좌표배열 입니다
+                strokeWeight: 5, // 선의 두께 입니다
+                strokeColor: '#FF0000', // 선의 색깔입니다
+                strokeOpacity: 0.8, // 선의 불투명도 입니다 1에서 0 사이의 값이며 0에 가까울수록 투명합니다
+                strokeStyle: 'solid' // 선의 스타일입니다
+            });
+
+            polyline.setMap(map);
+
+            // 지도에 클릭 이벤트를 등록합니다
+            kakao.maps.event.addListener(map, 'click', function(mouseEvent) {
+                var latlng = mouseEvent.latLng;
+
+                // 클릭한 위치에 작은 파란 점을 표시합니다
+                var circle = new kakao.maps.Circle({
+                    center: latlng,
+                    radius: 2, // 반지름
+                    strokeWeight: 0, // 선의 두께
+                    fillColor: '#0000FF', // 채우기 색깔
+                    fillOpacity: 0.9 // 채우기 불투명도
+                });
+
+                circle.setMap(map);
+                markers.push(circle);
+
+                // 클릭한 위치를 경로 배열에 추가합니다
+                var path = polyline.getPath();
+                path.push(latlng);
+                polyline.setPath(path);
+            });
+        }
+
+        // 경로의 위경도 리스트를 출력합니다
+        function getRouteCoords() {
+            var path = getPathWithMidpoints(polyline.getPath());
+            var coordsList = [];
+
+            for (var i = 0; i < path.length; i++) {
+                coordsList.push({
+                    lat: path[i].getLat(),
+                    lng: path[i].getLng()
+                });
+            }
+
+            document.getElementById('coordsList').innerHTML = JSON.stringify(coordsList, null, 2);
+        }
+
+        // 경로의 위경도 좌표를 UTM 좌표로 변환하여 CSV 형태로 변환 및 다운로드
+        function downloadCSV() {
+            var path = getPathWithMidpoints(polyline.getPath());
+            var csvContent = "data:text/csv;charset=utf-8,UTM_X,UTM_Y\n";
+
+            path.forEach(function(coord) {
+                var utmCoord = latLngToUTM(coord.getLat(), coord.getLng());
+                csvContent += utmCoord.x + "," + utmCoord.y + "\n";
+            });
+
+            var encodedUri = encodeURI(csvContent);
+            var link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", "route_coords_utm.csv");
+            document.body.appendChild(link); // Required for FF
+
+            link.click();
+        }
+
+        // 위경도를 UTM 좌표로 변환하는 함수
+        function latLngToUTM(lat, lon) {
+            var zone = Math.floor((lon + 180) / 6) + 1;
+            var λ0 = ((zone - 1) * 6 - 180 + 3) * Math.PI / 180;
+            var φ = lat * Math.PI / 180;
+            var λ = lon * Math.PI / 180;
+
+            var N = a / Math.sqrt(1 - e * e * Math.sin(φ) * Math.sin(φ));
+            var T = Math.tan(φ) * Math.tan(φ);
+            var C = ePrimeSquared * Math.cos(φ) * Math.cos(φ);
+            var A = Math.cos(φ) * (λ - λ0);
+
+            var M = a * ((1 - e * e / 4 - 3 * e * e * e * e / 64 - 5 * e * e * e * e * e * e / 256) * φ 
+                        - (3 * e * e / 8 + 3 * e * e * e * e / 32 + 45 * e * e * e * e * e * e / 1024) * Math.sin(2 * φ) 
+                        + (15 * e * e * e * e / 256 + 45 * e * e * e * e * e * e / 1024) * Math.sin(4 * φ) 
+                        - (35 * e * e * e * e * e * e / 3072) * Math.sin(6 * φ));
+
+            var x = 0.9996 * N * (A + (1 - T + C) * A * A * A / 6 + (5 - 18 * T + T * T + 72 * C - 58 * ePrimeSquared) * A * A * A * A * A / 120) + 500000;
+            var y = 0.9996 * (M + N * Math.tan(φ) * (A * A / 2 + (5 - T + 9 * C + 4 * C * C) * A * A * A * A / 24 + (61 - 58 * T + T * T + 600 * C - 330 * ePrimeSquared) * A * A * A * A * A * A / 720));
+            if (lat < 0) y += 10000000; // 남반구 보정
+
+            return { x: x, y: y, zone: zone };
+        }
+
+        // 각 마커 사이의 경로를 20등분하여 중간 점들을 포함한 경로를 반환하는 함수
+        function getPathWithMidpoints(path) {
+            var newPath = [];
+
+            for (var i = 0; i < path.length - 1; i++) {
+                var start = path[i];
+                var end = path[i + 1];
+
+                newPath.push(start);
+                for (var j = 1; j <= 20; j++) {
+                    var lat = start.getLat() + (end.getLat() - start.getLat()) * j / 21;
+                    var lng = start.getLng() + (end.getLng() - start.getLng()) * j / 21;
+                    newPath.push(new kakao.maps.LatLng(lat, lng));
+                }
+            }
+            newPath.push(path[path.length - 1]);
+
+            return newPath;
+        }
+    </script>
+</body>
+</html>
